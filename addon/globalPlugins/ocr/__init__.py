@@ -13,9 +13,6 @@ import tempfile
 import subprocess
 from xml.parsers import expat
 from collections import namedtuple
-from io import StringIO
-import configobj
-import validate
 import wx
 import config
 import globalPluginHandler
@@ -24,7 +21,7 @@ import api
 from logHandler import log
 import languageHandler
 import addonHandler
-addonHandler.initTranslation()
+from .PIL import ImageGrab, Image
 import textInfos.offsets
 import ui
 import locationHelper
@@ -32,8 +29,12 @@ import locationHelper
 PLUGIN_DIR = os.path.dirname(__file__)
 TESSERACT_EXE = os.path.join(PLUGIN_DIR, "tesseract", "tesseract.exe")
 
-from .PIL import ImageGrab
-from .PIL import Image
+_addonDir = os.path.join(os.path.dirname(__file__), "..", "..")
+if isinstance(_addonDir, bytes):
+	_addonDir = _addonDir.decode("mbcs")
+_curAddon = addonHandler.Addon(_addonDir)
+_addonSummary = _curAddon.manifest['summary']
+addonHandler.initTranslation()
 
 IMAGE_RESIZE_FACTOR = 2
 
@@ -58,24 +59,21 @@ class HocrParser(object):
 		del self._textList
 
 	def _startElement(self, tag, attrs):
-		print(f"ElementStart: {tag} {attrs}")
 		if tag in ("p", "div"):
 			self._hasBlockHadContent = False
 		elif tag == "span":
 			cls = attrs["class"]
 			if cls == "ocr_line":
 				self.lines.append(self.textLen)
-			elif cls == "ocr_word":
+			elif cls == "ocrx_word":
 				# Get the coordinates from the bbox info specified in the title attribute.
 				title = attrs.get("title")
-				print(f"title: {title}")
 				prefix, l, t, r, b = title.split(" ")
 				self.words.append(OcrWord(self.textLen,
 					self.leftCoordOffset + int(l) / IMAGE_RESIZE_FACTOR,
 					self.topCoordOffset + int(t) / IMAGE_RESIZE_FACTOR))
 
 	def _endElement(self, tag):
-		print(f"elementEnd: {tag}")
 		pass
 
 	def _charData(self, data):
@@ -133,6 +131,7 @@ class OcrTextInfo(textInfos.offsets.OffsetsTextInfo):
 		return locationHelper.Point(int(word.left), int(word.top))
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
+	scriptCategory = _addonSummary
 	def __init__(self):
 		super(globalPluginHandler.GlobalPlugin, self).__init__()
 		self.ocrSettingsItem = gui.mainFrame.sysTrayIcon.preferencesMenu.Append(wx.ID_ANY,
@@ -150,7 +149,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def onOCRSettings(self, event):
 		# Pop a dialog with available OCR languages to set
 		langs = sorted(getAvailableTesseractLanguages())
-		curlang = getConfig()['language']
+		curlang = config.conf['ocr']['language']
 		try:
 			select = langs.index(curlang)
 		except ValueError:
@@ -164,11 +163,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		gui.mainFrame.postPopup()
 		if ret == wx.ID_OK:
 			lang = langs[dialog.GetSelection()]
-			getConfig()['language'] = lang
-			try:
-				getConfig().write()
-			except IOError:
-				log.error("Error writing ocr configuration", exc_info=True)
+			config.conf['ocr']['language'] = lang
 	def script_ocrNavigatorObject(self, gesture):
 		nav = api.getNavigatorObject()
 		left, top, width, height = nav.location
@@ -183,7 +178,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			img.save(imgFile)
 
 			ui.message(_("Running OCR"))
-			lang = getConfig()['language']
+			lang = config.conf['ocr']['language']
 			# Hide the Tesseract window.
 			si = subprocess.STARTUPINFO()
 			si.dwFlags = subprocess.STARTF_USESHOWWINDOW
@@ -210,9 +205,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		nav.makeTextInfo = lambda position: OcrTextInfo(nav, position, parser)
 		api.setReviewPosition(nav.makeTextInfo(textInfos.POSITION_FIRST))
 		ui.message(_("Done"))
+	script_ocrNavigatorObject.__doc__=_("Recognizes window using tesseract ocr engine.")
 
 	__gestures = {
-		"kb:NVDA+r": "ocrNavigatorObject",
+		"kb:NVDA+shift+r": "ocrNavigatorObject",
 	}
 
 localesToTesseractLangs = {
@@ -262,15 +258,7 @@ def getDefaultLanguage():
 		lang = lang.split("_")[0]
 	return localesToTesseractLangs.get(lang, "eng")
 
-_config = None
-configspec = StringIO("""
-language=string(default={defaultLanguage})
-""".format(defaultLanguage=getDefaultLanguage()))
-def getConfig():
-	global _config
-	if not _config:
-		path = os.path.join(config.getUserDefaultConfigPath(), "ocr.ini")
-		_config = configobj.ConfigObj(path, configspec=configspec)
-		val = validate.Validator()
-		_config.validate(val)
-	return _config
+confspec = {
+	'language': 'string(default=eng)'
+}
+config.conf.spec["ocr"] = confspec

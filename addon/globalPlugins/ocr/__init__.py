@@ -40,6 +40,37 @@ IMAGE_RESIZE_FACTOR = 2
 
 OcrWord = namedtuple("OcrWord", ("offset", "left", "top"))
 
+class OcrSettingsPanel(gui.SettingsPanel):
+	# Translators: name of the dialog.
+	title = _("Ocr")
+
+	def makeSettings(self, sizer):
+		self.langs = sorted(getAvailableTesseractLanguages())
+		# Translators: Help message for a dialog.
+		helpLabel = wx.StaticText(self, label=_("Select Recognition language:"))
+		helpLabel.Wrap(self.GetSize()[0])
+		sizer.Add(helpLabel)
+		languageSizer = wx.BoxSizer(wx.HORIZONTAL)
+		# Translators: A setting in addon settings dialog.
+		languageLabel = wx.StaticText(self, label=_("Language:"))
+		languageSizer.Add(languageLabel)
+		curlang = config.conf['ocr']['language']
+		try:
+			select = self.langs.index(curlang)
+		except ValueError:
+			select = self.langs.index('eng')
+		choices = [languageHandler.getLanguageDescription(tesseractLangsToLocales[lang]) or tesseractLangsToLocales[lang] for lang in self.langs]
+		self._languageChoice = wx.Choice(self, choices=choices)
+		languageSizer.Add(self._languageChoice)
+		sizer.Add(languageSizer)
+		self._languageChoice.Select(select)
+
+	def postInit(self):
+		self._languageChoice.SetFocus()
+
+	def onSave(self):
+		config.conf['ocr']['language'] = self.langs[self._languageChoice.GetSelection()]
+
 class HocrParser(object):
 
 	def __init__(self, xml, leftCoordOffset, topCoordOffset):
@@ -68,7 +99,7 @@ class HocrParser(object):
 			elif cls == "ocrx_word":
 				# Get the coordinates from the bbox info specified in the title attribute.
 				title = attrs.get("title")
-				prefix, l, t, r, b = title.split(" ")
+				prefix, l, t, r, b = title.split(";")[0].split(" ")
 				self.words.append(OcrWord(self.textLen,
 					self.leftCoordOffset + int(l) / IMAGE_RESIZE_FACTOR,
 					self.topCoordOffset + int(t) / IMAGE_RESIZE_FACTOR))
@@ -134,36 +165,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	scriptCategory = _addonSummary
 	def __init__(self):
 		super(globalPluginHandler.GlobalPlugin, self).__init__()
-		self.ocrSettingsItem = gui.mainFrame.sysTrayIcon.preferencesMenu.Append(wx.ID_ANY,
-			# Translators: The name of the OCR settings item
-			# in the NVDA Preferences menu.
-			_("OCR settings..."))
-		gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self.onOCRSettings, self.ocrSettingsItem)
+		gui.settingsDialogs.NVDASettingsDialog.categoryClasses.append(OcrSettingsPanel)
 
 	def terminate(self):
-		try:
-			gui.mainFrame.sysTrayIcon.preferencesMenu.RemoveItem(self.ocrSettingsItem)
-		except wx.PyDeadObjectError:
-			pass
+		gui.settingsDialogs.NVDASettingsDialog.categoryClasses.remove(OcrSettingsPanel)
 
-	def onOCRSettings(self, event):
-		# Pop a dialog with available OCR languages to set
-		langs = sorted(getAvailableTesseractLanguages())
-		curlang = config.conf['ocr']['language']
-		try:
-			select = langs.index(curlang)
-		except ValueError:
-			select = langs.index('eng')
-		choices = [languageHandler.getLanguageDescription(tesseractLangsToLocales[lang]) or tesseractLangsToLocales[lang] for lang in langs]
-		log.debug("Available OCR languages: %s", ", ".join(choices))
-		dialog = wx.SingleChoiceDialog(gui.mainFrame, _("Select OCR Language"), _("OCR Settings"), choices=choices)
-		dialog.SetSelection(select)
-		gui.mainFrame.prePopup()
-		ret = dialog.ShowModal()
-		gui.mainFrame.postPopup()
-		if ret == wx.ID_OK:
-			lang = langs[dialog.GetSelection()]
-			config.conf['ocr']['language'] = lang
 	def script_ocrNavigatorObject(self, gesture):
 		nav = api.getNavigatorObject()
 		left, top, width, height = nav.location
@@ -191,7 +197,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			except OSError:
 				pass
 		try:
-			hocrFile = baseFile + ".html"
+			hocrFile = baseFile + ".hocr"
 
 			parser = HocrParser(open(hocrFile,encoding='utf8').read(),
 				left, top)
@@ -212,6 +218,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	}
 
 localesToTesseractLangs = {
+"af" : "afr",
+"am" : "amh",
+"ar" : "ara",
 "bg" : "bul",
 "ca" : "cat",
 "cs" : "ces",
@@ -226,6 +235,7 @@ localesToTesseractLangs = {
 "id" : "ind",
 "it" : "ita",
 "ja" : "jpn",
+"ka" : "kat",
 "ko" : "kor",
 "lv" : "lav",
 "lt" : "lit",
@@ -240,7 +250,6 @@ localesToTesseractLangs = {
 "es" : "spa",
 "sr" : "srp",
 "sv" : "swe",
-"tg" : "tgl",
 "tr" : "tur",
 "uk" : "ukr",
 "vi" : "vie"
